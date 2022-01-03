@@ -19,6 +19,7 @@
 */
 
 import Route from '@ioc:Adonis/Core/Route'
+import {schema} from '@ioc:Adonis/Core/Validator'
 import * as Filesystem from "fs/promises"
 import {Buffer} from 'buffer';
 import * as FileType from 'file-type';
@@ -46,6 +47,22 @@ const unzip = (filePath: PathLike): Promise<Record<string, Buffer>> => new Promi
         })
 })
 
+interface OutputFormat {
+    extension: string,
+    mime: string,
+}
+
+const mapShaperFormatToMimeMap: Record<string, OutputFormat> = {
+    shapefile: { extension: "shp", mime: "application/x-esri-shape" },
+    geojson: { extension: "json", mime: "application/json" },
+    topojson: { extension: "json", mime: "application/json" },
+    json: { extension: "json", mime: "application/json" },
+    dbf: { extension: "dbf", mime: "application/dbase" },
+    csv: { extension: "csv", mime: "text/csv" },
+    tsv: { extension: "tsv", mime: "text/tab-separated-values" },
+    svg: { extension: "svg", mime: "image/svg+xml" },
+}
+
 const geospatialConvert = async (
     filepath: string,
     filename: string,
@@ -70,8 +87,6 @@ const geospatialConvert = async (
         await fileHandle.close()
     }
 
-    const outputFilename = `output.${targetFormat}`
-
     const processableFilenames = Object.keys(fileBuffers)
         .filter(filename =>
             filename.endsWith(".shp") ||
@@ -81,6 +96,8 @@ const geospatialConvert = async (
     const extraOptionsPart = Object.keys(extraOptions).reduce((curr, next) => {
         return `${curr} -${next} ${extraOptions[next]}`
     }, "")
+
+    const outputFilename = `output.${mapShaperFormatToMimeMap[targetFormat].extension}`
 
     const command = `-i ${processableFilenames.join(" ")} ${extraOptionsPart} -o ${outputFilename}`
     const transformedData: mapShaperOutput = await mapshaper.applyCommands(
@@ -92,15 +109,20 @@ const geospatialConvert = async (
 }
 
 Route.post('/shp-to-geojson', async ({request, response}) => {
-    const shpFile = request.file("shp_file")
-    const filePath = shpFile?.tmpPath
-    const fileName = shpFile?.clientName
+    const payload = await request.validate({
+        schema: schema.create({
+            file: schema.file({ extnames: ["zip", "geojson", "shp", "prj"] }),
+            targetFormat: schema.enum([
+                "shapefile", "geojson", "topojson", "json", "dbf", "csv", "tsv", "svg",
+            ] as const),
+        })
+    })
 
-    if ((filePath !== undefined) && (fileName !== undefined)) {
+    if ((payload.file.tmpPath !== undefined) && (payload.file.clientName !== undefined)) {
         try {
-            const outputBuffer = await geospatialConvert(filePath, fileName)
+            const outputBuffer = await geospatialConvert(payload.file.tmpPath, payload.file.clientName, payload.targetFormat)
 
-            response.header('content-type', `application/json`)
+            response.header('content-type', mapShaperFormatToMimeMap[payload.targetFormat].mime)
             response.header('content-length', outputBuffer.byteLength)
             response.send(outputBuffer.toString())
         } catch (fileError) {
@@ -113,7 +135,7 @@ Route.post('/shp-to-geojson', async ({request, response}) => {
         }
     } else {
         return {
-            error: true, filePath: filePath
+            error: true, filePath: payload.file.tmpPath
         }
     }
 })
