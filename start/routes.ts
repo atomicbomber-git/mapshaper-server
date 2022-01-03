@@ -63,11 +63,28 @@ const mapShaperFormatToMimeMap: Record<string, OutputFormat> = {
     svg: { extension: "svg", mime: "image/svg+xml" },
 }
 
+const mapShaperOptionNames = [
+    "affine", "classify", "clean", "clip", "colorizer",
+    "dissolve", "dissolve2", "divide", "dots", "drop",
+    "each", "erase", "explode", "filter", "filter-fields",
+    "filter-islands", "filter-slivers", "graticule", "grid", "include",
+    "inlay", "innerlines", "join", "lines", "merge-layers",
+    "mosaic", "point-grid", "points", "polygons", "proj",
+    "rectangle", "rectangles", "rename-fields", "rename-layers", "require",
+    "run", "shape", "simplify", "sort", "split",
+    "split-on-grid", "subdivide", "style", "target", "union", "uniq",
+]
+
+interface MapShaperOption {
+    option: string
+    value: string
+}
+
 const geospatialConvert = async (
     filepath: string,
     filename: string,
     targetFormat: string = "geojson",
-    extraOptions: object = {},
+    extraOptions: MapShaperOption[] = [],
 ): Promise<Buffer> => {
     const fileMime = (await FileType.fromFile(filepath))?.mime
     if (!fileMime) {
@@ -89,17 +106,20 @@ const geospatialConvert = async (
 
     const processableFilenames = Object.keys(fileBuffers)
         .filter(filename =>
-            filename.endsWith(".shp") ||
-            filename.endsWith(".prj")
+            filename.endsWith(".shp")
+            || filename.endsWith(".prj")
         )
 
-    const extraOptionsPart = Object.keys(extraOptions).reduce((curr, next) => {
-        return `${curr} -${next} ${extraOptions[next]}`
-    }, "")
+    const extraOptionsPart = extraOptions
+        .map(({option, value}) => `-${option} ${value}`)
+        .join(' ')
 
     const outputFilename = `output.${mapShaperFormatToMimeMap[targetFormat].extension}`
 
-    const command = `-i ${processableFilenames.join(" ")} ${extraOptionsPart} -o ${outputFilename}`
+    const command = `-i ${processableFilenames.join(" ")} -o ${extraOptionsPart} ${outputFilename}`
+    console.log(command)
+
+
     const transformedData: mapShaperOutput = await mapshaper.applyCommands(
         command,
         fileBuffers,
@@ -108,19 +128,30 @@ const geospatialConvert = async (
     return transformedData[outputFilename]
 }
 
-Route.post('/shp-to-geojson', async ({request, response}) => {
+Route.post('/convert', async ({request, response}) => {
     const payload = await request.validate({
         schema: schema.create({
-            file: schema.file({ extnames: ["zip", "geojson", "shp", "prj"] }),
+            file: schema.file({ extnames: ["zip", "geojson", "shp"] }),
             targetFormat: schema.enum([
                 "shapefile", "geojson", "topojson", "json", "dbf", "csv", "tsv", "svg",
             ] as const),
+            options: schema.array.optional().members(
+                schema.object().members({
+                    option: schema.enum(mapShaperOptionNames),
+                    value: schema.string()
+                })
+            )
         })
     })
 
     if ((payload.file.tmpPath !== undefined) && (payload.file.clientName !== undefined)) {
         try {
-            const outputBuffer = await geospatialConvert(payload.file.tmpPath, payload.file.clientName, payload.targetFormat)
+            const outputBuffer = await geospatialConvert(
+                payload.file.tmpPath,
+                payload.file.clientName.replaceAll(' ', '_').toLowerCase(),
+                payload.targetFormat,
+                payload.options
+            )
 
             response.header('content-type', mapShaperFormatToMimeMap[payload.targetFormat].mime)
             response.header('content-length', outputBuffer.byteLength)
