@@ -19,50 +19,102 @@
 */
 
 import Route from '@ioc:Adonis/Core/Route'
-import fs, {PathOrFileDescriptor} from "fs"
+import * as Filesystem from "fs/promises"
+import {Buffer} from 'buffer';
+import * as FileType from 'file-type';
+import {Entry} from "unzipper";
+import {PathLike} from "fs";
 
+const fs = require("fs")
+const unzipper = require("unzipper")
 const mapshaper = require("mapshaper")
-
-const readFileAsync = (path: PathOrFileDescriptor): Promise<Buffer> => {
-    return new Promise((resolve, reject) => {
-        fs.readFile(path, (err, data) => {
-            if (err !== null) {
-                reject(err)
-            } else {
-                resolve(data)
-            }
-        })
-    })
-}
 
 interface mapShaperOutput {
     "output.geojson": Buffer
 }
 
+const unzip = (filePath: PathLike): Promise<Record<string, Buffer>> => new Promise((resolve, reject) => {
+    const results: Record<string, Buffer> = {}
+    fs.createReadStream(filePath)
+        .pipe(unzipper.Parse())
+        .on('error', reject)
+        .on('entry', async function (entry: Entry) {
+            results[entry.path] = await entry.buffer()
+        })
+        .on('finish', () => {
+            resolve(results)
+        })
+})
+
+const geospatialConvert = async (
+    filepath: string,
+    filename: string,
+    targetFormat: string = "geojson",
+    extraOptions: object = {},
+): Promise<Buffer> => {
+    const fileMime = (await FileType.fromFile(filepath))?.mime
+    if (!fileMime) {
+        throw {
+            type: "FILE_TYPE_ERROR",
+            message: `Uploaded file has an unknown / undetectable mime type.`
+        }
+    }
+
+    let fileBuffers: Record<string, Buffer> = {}
+
+    if (fileMime === "application/zip") {
+        fileBuffers = await unzip(filepath)
+    } else {
+        const fileHandle = await Filesystem.open(filepath, 'r')
+        fileBuffers[filename] = await fileHandle.readFile()
+    }
+
+    const outputFilename = `output.${targetFormat}`
+
+    const processableFilenames = Object.keys(fileBuffers)
+        .filter(filename =>
+            filename.endsWith(".shp") ||
+            filename.endsWith(".prj")
+        )
+
+    const extraOptionsPart = Object.keys(extraOptions).reduce((curr, next) => {
+        return `${curr} -${next} ${extraOptions[next]}`
+    }, "")
+
+    const command = `-i ${processableFilenames.join(" ")} ${extraOptionsPart} -o ${outputFilename}`
+
+    const transformedData: mapShaperOutput = await mapshaper.applyCommands(
+        command,
+        fileBuffers,
+    )
+
+    return transformedData[outputFilename]
+}
+
 Route.post('/shp-to-geojson', async ({request, response}) => {
     const shpFile = request.file("shp_file")
-
     const filePath = shpFile?.tmpPath
+    const fileName = shpFile?.clientName
 
-    if (filePath !== undefined) {
+    if ((filePath !== undefined) && (fileName !== undefined)) {
         try {
-            const fileData = await readFileAsync(filePath)
-
-            const transformedData: mapShaperOutput = await mapshaper.applyCommands(
-                `-i input.shp -proj wgs84 -o output.geojson`,
-                {'input.shp': fileData},
-            )
+            const outputBuffer = await geospatialConvert(filePath, fileName)
 
             response.header('content-type', `application/json`)
-            response.header('content-length', transformedData["output.geojson"].byteLength)
-            response.send(transformedData["output.geojson"].toString())
+            response.header('content-length', outputBuffer.byteLength)
+            response.send(outputBuffer.toString())
+
         } catch (fileError) {
             return {
-                processingError: true,
-                error: fileError,
+                error: {
+                    type: 'PROCESSING_ERROR',
+                    ...fileError
+                },
             }
         }
     } else {
-        return {error: true, filePath: filePath}
+        return {
+            error: true, filePath: filePath
+        }
     }
 })

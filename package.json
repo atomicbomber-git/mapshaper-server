@@ -18,9 +18,14 @@
   "dependencies": {
     "@adonisjs/core": "^5.4.2",
     "@adonisjs/repl": "^3.1.7",
+    "@types/unzipper": "^0.10.5",
+    "@types/yauzl": "^2.9.2",
+    "file-type": "^16.5.3",
     "mapshaper": "^0.5.83",
     "proxy-addr": "^2.0.7",
     "reflect-metadata": "^0.1.13",
-    "source-map-support": "^0.5.21"
+    "source-map-support": "^0.5.21",
+    "unzipper": "^0.10.11",
+    "yauzl": "^2.10.0"
   }
 }
