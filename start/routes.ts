@@ -67,6 +67,7 @@ const geospatialConvert = async (
     } else {
         const fileHandle = await Filesystem.open(filepath, 'r')
         fileBuffers[filename] = await fileHandle.readFile()
+        await fileHandle.close()
     }
 
     const outputFilename = `output.${targetFormat}`
@@ -82,7 +83,6 @@ const geospatialConvert = async (
     }, "")
 
     const command = `-i ${processableFilenames.join(" ")} ${extraOptionsPart} -o ${outputFilename}`
-
     const transformedData: mapShaperOutput = await mapshaper.applyCommands(
         command,
         fileBuffers,
@@ -103,7 +103,6 @@ Route.post('/shp-to-geojson', async ({request, response}) => {
             response.header('content-type', `application/json`)
             response.header('content-length', outputBuffer.byteLength)
             response.send(outputBuffer.toString())
-
         } catch (fileError) {
             return {
                 error: {
