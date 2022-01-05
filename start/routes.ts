@@ -25,6 +25,7 @@ import {Buffer} from 'buffer';
 import * as FileType from 'file-type';
 import {Entry} from "unzipper";
 import {PathLike} from "fs";
+
 const fs = require("fs")
 const unzipper = require("unzipper")
 const mapshaper = require("mapshaper")
@@ -51,7 +52,12 @@ interface OutputFormat {
 }
 
 const mapShaperFormatToMimeMap: Record<string, OutputFormat> = {
-    shapefile: {extension: "shp", mime: "application/x-esri-shape", outputExtension: "zip", outputMime: "application/zip"},
+    shapefile: {
+        extension: "shp",
+        mime: "application/x-esri-shape",
+        outputExtension: "zip",
+        outputMime: "application/zip"
+    },
     geojson: {extension: "json", mime: "application/json"},
     topojson: {extension: "json", mime: "application/json"},
     json: {extension: "json", mime: "application/json"},
@@ -94,35 +100,54 @@ const geospatialConvert = async (
         }
     }
 
-    let fileBuffers: Record<string, Buffer> = {}
+    let inputFiles: Record<string, Buffer | string> = {}
 
     if (fileMime === "application/zip") {
-        fileBuffers = await unzip(filepath)
+        inputFiles = await unzip(filepath)
+
+        for (const fileDataKey in inputFiles) {
+            if (fileDataKey.endsWith(".prj")) {
+                inputFiles[fileDataKey] = inputFiles[fileDataKey].toString()
+            }
+        }
     } else {
         const fileHandle = await Filesystem.open(filepath, 'r')
-        fileBuffers[filename] = await fileHandle.readFile()
+        inputFiles[filename] = await fileHandle.readFile()
         await fileHandle.close()
     }
 
-    const processableFilenames = Object.keys(fileBuffers)
+    const fileInputOrders = {
+        "prj": 1,
+        "dbf": 2,
+        "shp": 3,
+    }
+
+    const processableFilenames = Object.keys(inputFiles)
         .filter(filename =>
             filename.endsWith(".shp")
             || filename.endsWith(".prj")
+            || filename.endsWith(".dbf")
             || filename.endsWith(".json")
-        )
+        ).sort((a, b) => {
+            const extensionA = a.split(".")[1]
+            const extensionB = b.split(".")[1]
+            return fileInputOrders[extensionA] - fileInputOrders[extensionB]
+        })
+
+    const processableFiles = processableFilenames.reduce((curr, next) => {
+        return {...curr, [next]: inputFiles[next]}
+    }, {})
 
     const extraOptionsPart = extraOptions
         .map(({option, value}) => `-${option} ${value}`)
         .join(' ')
 
     const outputFilename = `output.${mapShaperFormatToMimeMap[targetFormat].extension}`
-
-    const command = `-i ${processableFilenames.join(" ")} -proj wgs84 -o ${extraOptionsPart} ${outputFilename}`
-
+    const command = `-i ${processableFilenames.join(" ")} ${extraOptionsPart} -o ${outputFilename}`
 
     const transformedData: Record<string, Buffer> = await mapshaper.applyCommands(
         command,
-        fileBuffers,
+        processableFiles,
     )
 
     if (Object.keys(transformedData).length > 1) {
@@ -139,6 +164,7 @@ const geospatialConvert = async (
                 .on('error', reject)
                 .on('finish', () => {
                     let fh
+                    // TODO: Don't use output.zip, use random filenames to support concurrency
                     Filesystem.open("output.zip", "r")
                         .then(fileHandle => {
                             fh = fileHandle
@@ -187,6 +213,8 @@ Route.post('/convert', async ({request, response}) => {
                 .header('content-disposition', `attachment; filename="output.${outputConfig?.outputExtension ?? outputConfig.extension}"`)
                 .send(outputBuffer)
         } catch (fileError) {
+            console.log(fileError)
+
             return {
                 error: {
                     type: 'PROCESSING_ERROR',
