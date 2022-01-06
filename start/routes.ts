@@ -77,7 +77,7 @@ const mapShaperOptionNames = [
     "rectangle", "rectangles", "rename-fields", "rename-layers", "require",
     "run", "shape", "simplify", "sort", "split",
     "split-on-grid", "subdivide", "style", "target", "union", "uniq",
-]
+].map(val => `-${val}`)
 
 interface MapShaperOption {
     option: string
@@ -139,11 +139,12 @@ const geospatialConvert = async (
     }, {})
 
     const extraOptionsPart = extraOptions
-        .map(({option, value}) => `-${option} ${value}`)
+        .map(({option, value}) => `${option} ${value}`)
         .join(' ')
 
     const outputFilename = `output.${mapShaperFormatToMimeMap[targetFormat].extension}`
     const command = `-i ${processableFilenames.join(" ")} ${extraOptionsPart} -o ${outputFilename}`
+    console.info(`COMMAND: ${command}`)
 
     const transformedData: Record<string, Buffer> = await mapshaper.applyCommands(
         command,
@@ -213,12 +214,12 @@ Route.post('/convert', async ({request, response}) => {
                 .header('content-disposition', `attachment; filename="output.${outputConfig?.outputExtension ?? outputConfig.extension}"`)
                 .send(outputBuffer)
         } catch (fileError) {
-            console.log(fileError)
+            console.error(fileError)
 
             return {
                 error: {
-                    type: 'PROCESSING_ERROR',
-                    ...fileError
+                    type: fileError.name,
+                    message: fileError.message,
                 },
             }
         }
