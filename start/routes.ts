@@ -25,11 +25,12 @@ import {Buffer} from 'buffer';
 import * as FileType from 'file-type';
 import {Entry} from "unzipper";
 import {PathLike} from "fs";
+import crypto from "crypto"
 
 const fs = require("fs")
 const unzipper = require("unzipper")
 const mapshaper = require("mapshaper")
-var JSZip = require("jszip");
+var JSZip = require("jszip")
 
 const unzip = (filePath: PathLike): Promise<Record<string, Buffer>> => new Promise((resolve, reject) => {
     const results: Record<string, Buffer> = {}
@@ -160,21 +161,28 @@ const geospatialConvert = async (
         }
 
         return await new Promise((resolve, reject) => {
+            const randomZipFilename = `${crypto.randomBytes(20).toString('hex')}.zip`
+
             zip.generateNodeStream({type: 'nodebuffer', streamFiles: true})
-                .pipe(fs.createWriteStream("output.zip"))
+                .pipe(fs.createWriteStream(randomZipFilename))
                 .on('error', reject)
                 .on('finish', () => {
                     let fh
                     // TODO: Don't use output.zip, use random filenames to support concurrency
-                    Filesystem.open("output.zip", "r")
+                    Filesystem.open(randomZipFilename, "r")
                         .then(fileHandle => {
                             fh = fileHandle
                             return fileHandle.readFile()
                         })
                         .then(buffer => {
                             fh.close()
-                            resolve(buffer)
+                            
+                            Filesystem.unlink(randomZipFilename)
+                                .then(() => {
+                                    resolve(buffer)
+                                })
                         })
+                        .catch(reject)
                 })
         })
     }
